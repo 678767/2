@@ -1,0 +1,91 @@
+name: Build TWRP for EEBBK A7
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  twrp:
+    name: Build recovery.img
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
+      MANIFEST_BRANCH: twrp-12.1
+      DEVICE: ums512_1h10
+      LUNCH: omni_ums512_1h10-userdebug
+      TREE_PATH: device/eebbk/ums512_1h10
+
+    steps:
+      - name: Checkout device tree repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y git-core gnupg flex bison gperf build-essential \
+            zip unzip zlib1g-dev lib32z1-dev libncurses5:i386 libncurses5-dev \
+            libx11-dev x11proto-dev libgl1-mesa-dev gawk diff patch curl rsync \
+            schedtool libssl-dev openjdk-17-jdk ccache
+          ccache -M 10G
+
+      - name: Install repo tool
+        run: |
+          mkdir -p ~/bin
+          curl -sSL https://raw.githubusercontent.com/GerritCodeReview/git-repo/main/repo -o ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Sync TWRP source (minimal manifest)
+        run: |
+          mkdir -p $HOME/twrp
+          cd $HOME/twrp
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          repo init --depth=1 -u $MANIFEST_URL -b $MANIFEST_BRANCH \
+            -g default,-mips,-darwin,-notdefault
+          repo sync -c --no-tags --optimized-fetch --prune --force-sync -j$(nproc)
+          df -h $HOME
+
+      - name: Place device tree
+        run: |
+          cd $HOME/twrp
+          mkdir -p device/eebbk
+          cp -rT $GITHUB_WORKSPACE/$TREE_PATH device/eebbk/$DEVICE || \
+            cp -r $GITHUB_WORKSPACE/device/eebbk/. device/eebbk/
+          ls -la device/eebbk/
+
+      - name: Build recoveryimage
+        run: |
+          cd $HOME/twrp
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
+          export BUILD_BROKEN_DUP_RULES=true
+          export USE_CCACHE=1
+          source build/envsetup.sh
+          lunch $LUNCH
+          make -j$(nproc) recoveryimage 2>&1 | tee $HOME/build.log || \
+          make -j$(nproc) twrp 2>&1 | tee -a $HOME/build.log || true
+          echo "=== image search ==="
+          find out/target/product/$DEVICE -maxdepth 1 \( -name "*.img" -o -name "*.zip" \) -exec ls -lh {} \;
+          cp -f out/target/product/$DEVICE/recovery.img $GITHUB_WORKSPACE/recovery.img
+
+      - name: Upload build log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ~/build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload recovery.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-recovery-ums512-1h10
+          path: recovery.img
+          if-no-files-found: error
+          retention-days: 30
