@@ -23,14 +23,22 @@ jobs:
       - name: Checkout device tree repo
         uses: actions/checkout@v4
 
+      - name: Free disk space for AOSP build
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache || true
+          sudo dpkg --add-architecture i386
+          df -h /
+
       - name: Install dependencies
         run: |
           sudo apt-get -qq update
-          sudo apt-get -qq install -y git-core gnupg flex bison gperf build-essential \
-            zip unzip zlib1g-dev lib32z1-dev libncurses5:i386 libncurses5-dev \
-            libx11-dev x11proto-dev libgl1-mesa-dev gawk diff patch curl rsync \
-            schedtool libssl-dev openjdk-17-jdk ccache
-          ccache -M 10G
+          sudo apt-get -qq install -y git gnupg ccache automake autoconf m4 bison flex gperf \
+            unzip zip bzip2 rsync curl wget python3 python-is-python3 \
+            openjdk-17-jdk build-essential zlib1g-dev lib32z1-dev libxml2-utils \
+            libgl1-mesa-dev libncurses5-dev gawk diff patch file schedtool || \
+          sudo apt-get -qq install -y git ccache build-essential openjdk-17-jdk python3 || true
+          df -h /
+          java -version
 
       - name: Install repo tool
         run: |
@@ -47,16 +55,15 @@ jobs:
           git config --global user.email "actions@github.com"
           repo init --depth=1 -u $MANIFEST_URL -b $MANIFEST_BRANCH \
             -g default,-mips,-darwin,-notdefault
-          repo sync -c --no-tags --optimized-fetch --prune --force-sync -j$(nproc)
+          repo sync -c --no-tags --optimized-fetch --prune --force-sync -j4
           df -h $HOME
 
       - name: Place device tree
         run: |
           cd $HOME/twrp
           mkdir -p device/eebbk
-          cp -rT $GITHUB_WORKSPACE/$TREE_PATH device/eebbk/$DEVICE || \
-            cp -r $GITHUB_WORKSPACE/device/eebbk/. device/eebbk/
-          ls -la device/eebbk/
+          cp -rT $GITHUB_WORKSPACE/$TREE_PATH device/eebbk/$DEVICE
+          ls -la device/eebbk/$DEVICE
 
       - name: Build recoveryimage
         run: |
@@ -67,10 +74,15 @@ jobs:
           export USE_CCACHE=1
           source build/envsetup.sh
           lunch $LUNCH
-          make -j$(nproc) recoveryimage 2>&1 | tee $HOME/build.log || \
-          make -j$(nproc) twrp 2>&1 | tee -a $HOME/build.log || true
+          set +e
+          make -j$(nproc) recoveryimage 2>&1 | tee $HOME/build.log
+          RC=${PIPESTATUS[0]}
+          if [ $RC -ne 0 ] || [ ! -f out/target/product/$DEVICE/recovery.img ]; then
+            echo "=== retry with: m twrp ==="
+            make -j$(nproc) twrp 2>&1 | tee -a $HOME/build.log
+          fi
           echo "=== image search ==="
-          find out/target/product/$DEVICE -maxdepth 1 \( -name "*.img" -o -name "*.zip" \) -exec ls -lh {} \;
+          find out/target/product/$DEVICE -maxdepth 1 \( -name "*.img" -o -name "*.zip" \) -exec ls -lh {} \; 2>/dev/null
           cp -f out/target/product/$DEVICE/recovery.img $GITHUB_WORKSPACE/recovery.img
 
       - name: Upload build log (always)
