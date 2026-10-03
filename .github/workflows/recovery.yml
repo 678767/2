@@ -65,12 +65,25 @@ jobs:
           cp -rT $GITHUB_WORKSPACE/$TREE_PATH device/eebbk/$DEVICE
           ls -la device/eebbk/$DEVICE
 
+      - name: Create vendor/omni stub (not shipped by minimal AOSP manifest)
+        run: |
+          cd $HOME/twrp
+          mkdir -p vendor/omni/config
+          cat > vendor/omni/config/common.mk <<'EOF'
+          # Stub for minimal-manifest TWRP build.
+          # Real vendor/omni adds apps/extras we do not need in a recovery image.
+          # TWRP itself is provided by bootable/recovery in this manifest.
+          EOF
+          echo "stub created:"; ls -la vendor/omni/config/
+
       - name: Build recoveryimage
         run: |
           cd $HOME/twrp
           export ALLOW_MISSING_DEPENDENCIES=true
           export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
           export BUILD_BROKEN_DUP_RULES=true
+          export BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES=true
+          export SKIP_API_CHECKS=true
           export USE_CCACHE=1
           source build/envsetup.sh
           lunch $LUNCH
